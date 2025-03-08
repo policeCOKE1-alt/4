@@ -1,0 +1,151 @@
+-- Wait for the game to load
+repeat wait() until game:IsLoaded()
+print("[DEBUG] Game loaded. Starting multi-ball trajectory tracking...")
+
+local RunService = game:GetService("RunService")
+local Players = game:GetService("Players")
+local player = Players.LocalPlayer
+local character = player.Character or player.CharacterAdded:Wait()
+local hrp = character:WaitForChild("HumanoidRootPart")
+local gravity = workspace.Gravity * 0.60  -- typically 196.2 studs/sec^2 in Roblox
+
+-- SETTINGS
+local numTrajectoryPoints = 100         -- number of dots per trajectory line
+local timeStep = 0.01                  -- Further reduced for more precise simulation
+local maxTrackingDistance = 150        -- max distance (studs) to track a ball
+
+-- Shot speeds for each type of hit (adjust as needed)
+local shotSpeeds = {
+    forehand = {min = 32.5, max = 62.5},
+    overhead = {min = 35, max = 85},
+    serve = {min = 55, max = 107.5}
+}
+
+-- FOLDER FOR TRAJECTORY MARKERS
+local trajectoryFolder = workspace:FindFirstChild("Trajectory")
+if not trajectoryFolder then
+    trajectoryFolder = Instance.new("Folder")
+    trajectoryFolder.Name = "Trajectory"
+    trajectoryFolder.Parent = workspace
+end
+
+-- TABLE TO TRACK BALLS
+local trackedBalls = {}
+
+-- FUNCTION: Create trajectory marker parts for a hit and delete them after 1 second
+local function createTrajectoryMarkers()
+    local markers = {}
+    for i = 1, numTrajectoryPoints do
+        local part = Instance.new("Part")
+        part.Size = Vector3.new(0.3, 0.3, 0.3)
+        part.Shape = Enum.PartType.Ball
+        part.Material = Enum.Material.SmoothPlastic
+        part.Color = Color3.new(1.000000, 0.000000, 0.000000)  -- red markers
+        part.Transparency = 0.8 -- Slightly transparent to be less distracting
+        part.Anchored = true
+        part.CanCollide = false
+        part.CanTouch = false  -- Prevents any interactions
+        part.CanQuery = false  -- Prevents any physics-based interaction
+        part.Parent = trajectoryFolder
+        table.insert(markers, part)
+    end
+    
+    -- Schedule markers for removal after 1 second
+    task.spawn(function()
+        wait(0.8)
+        for _, marker in ipairs(markers) do
+            if marker then marker:Destroy() end
+        end
+    end)
+    
+    return markers
+end
+
+-- FUNCTION: Add a ball to the tracking table (only once)
+local function addBall(ball)
+    if trackedBalls[ball] then return end
+    trackedBalls[ball] = {
+        lastPos = ball.Position,
+        lastVelocity = Vector3.new(0, 0, 0),
+        hasHitOccurred = false,
+        hitStartPos = nil,
+        hitVelocity = nil,
+        trajectoryMarkers = nil,
+        lastHitter = nil
+    }
+    print("[DEBUG] Now tracking new ball: " .. ball.Name)
+end
+
+-- FUNCTION: Remove a ball from tracking
+local function removeBall(ball)
+    trackedBalls[ball] = nil
+    print("[DEBUG] Removed ball from tracking: " .. ball.Name)
+end
+
+-- FUNCTION: Determine if trajectory should be shown based on teams
+local function isOpponentHit(ball)
+    local hitter = ball:GetAttribute("LastHitter")
+    if not hitter or not hitter:IsA("Player") then return true end -- Assume non-player objects are valid hits
+    
+    -- Hide trajectory for players on the same team as the local player
+    return hitter.Team ~= player.Team
+end
+
+-- SCAN FOR BALLS AT A LOWER FREQUENCY
+spawn(function()
+    while wait(0.3) do
+        local foundBalls = {}
+        for _, obj in ipairs(workspace:GetDescendants()) do
+            if obj:IsA("BasePart") and string.find(string.lower(obj.Name), "ball") then
+                if (obj.Position - hrp.Position).Magnitude <= maxTrackingDistance then
+                    foundBalls[obj] = true
+                    if not trackedBalls[obj] then
+                        addBall(obj)
+                    end
+                end
+            end
+        end
+        for ball, _ in pairs(trackedBalls) do
+            if not ball or not ball.Parent or not foundBalls[ball] then
+                removeBall(ball)
+            end
+        end
+    end
+end)
+
+-- MAIN LOOP: Update tracked balls every frame
+RunService.RenderStepped:Connect(function(deltaTime)
+    for ball, state in pairs(trackedBalls) do
+        local currentPos = ball.Position
+        local currentVelocity = (currentPos - state.lastPos) / deltaTime
+
+        local prevHoriz = Vector3.new(state.lastVelocity.X, 0, state.lastVelocity.Z)
+        local currHoriz = Vector3.new(currentVelocity.X, 0, currentVelocity.Z)
+
+        if not state.trajectoryMarkers or state.hasHitOccurred then
+            if prevHoriz.Magnitude > 0 and currHoriz.Magnitude > 0 then
+                local dotProduct = prevHoriz.Unit:Dot(currHoriz.Unit)
+                if dotProduct < 0 then
+                    if isOpponentHit(ball) then
+                        state.hitVelocity = currentVelocity
+                        state.hitStartPos = currentPos
+                        state.hasHitOccurred = true
+                        state.trajectoryMarkers = createTrajectoryMarkers()
+                    end
+                end
+            end
+        end
+
+        -- Update trajectory markers with more accurate simulation
+        if state.trajectoryMarkers then
+            for i, marker in ipairs(state.trajectoryMarkers) do
+                local t = i * timeStep
+                local predictedPos = state.hitStartPos + state.hitVelocity * t + Vector3.new(0, -0.5 * gravity * t^2, 0)
+                marker.Position = predictedPos
+            end
+        end
+
+        state.lastVelocity = currentVelocity
+        state.lastPos = currentPos
+    end
+end)
