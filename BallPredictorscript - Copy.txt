@@ -1,29 +1,19 @@
--- Wait for the game to load
-repeat wait() until game:IsLoaded()
-print("[DEBUG] Game loaded. Starting multi-ball trajectory tracking...")
+-- BallPredictor1.txt (modified to support stopping)
+local predictor = {}
+predictor.running = true   -- Controls the lifetime of all loops
+predictor.enabled = true   -- Controls whether the predictor is active
 
 local RunService = game:GetService("RunService")
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
 local character = player.Character or player.CharacterAdded:Wait()
 local hrp = character:WaitForChild("HumanoidRootPart")
-local gravity = workspace.Gravity * 0.60  -- typically 196.2 studs/sec^2 in Roblox
+local gravity = workspace.Gravity * 0.60  -- typically 196.2 studs/sec^2
 
 -- SETTINGS
 local numTrajectoryPoints = 100         -- number of dots per trajectory line
-local timeStep = 0.01                   -- Further reduced for more precise simulation
+local timeStep = 0.01                   -- simulation time step for prediction
 local maxTrackingDistance = 150         -- max distance (studs) to track a ball
-
--- Global toggle and commands for enabling/disabling the ball predictor
-_G.BallPredictor1Enabled = true
-_G.BallPredictor1On = function()
-    _G.BallPredictor1Enabled = true
-    print("[DEBUG] Ball Predictor 1 turned ON")
-end
-_G.BallPredictor1Off = function()
-    _G.BallPredictor1Enabled = false
-    print("[DEBUG] Ball Predictor 1 turned OFF")
-end
 
 -- FOLDER FOR TRAJECTORY MARKERS
 local trajectoryFolder = workspace:FindFirstChild("Trajectory")
@@ -36,7 +26,7 @@ end
 -- TABLE TO TRACK BALLS
 local trackedBalls = {}
 
--- FUNCTION: Create trajectory marker parts for a hit and delete them after 1 second
+-- FUNCTION: Create trajectory markers (dots) for a hit; auto-destroys them after 0.8 seconds
 local function createTrajectoryMarkers()
     local markers = {}
     for i = 1, numTrajectoryPoints do
@@ -45,27 +35,24 @@ local function createTrajectoryMarkers()
         part.Shape = Enum.PartType.Ball
         part.Material = Enum.Material.SmoothPlastic
         part.Color = Color3.new(1, 0, 0)  -- red markers
-        part.Transparency = 0.8 -- Slightly transparent to be less distracting
+        part.Transparency = 0.8
         part.Anchored = true
         part.CanCollide = false
-        part.CanTouch = false  -- Prevents any interactions
-        part.CanQuery = false  -- Prevents any physics-based interaction
+        part.CanTouch = false
+        part.CanQuery = false
         part.Parent = trajectoryFolder
         table.insert(markers, part)
     end
-    
-    -- Schedule markers for removal after 0.8 seconds
     task.spawn(function()
         wait(0.8)
         for _, marker in ipairs(markers) do
             if marker then marker:Destroy() end
         end
     end)
-    
     return markers
 end
 
--- FUNCTION: Add a ball to the tracking table (only once)
+-- FUNCTION: Add a ball to tracking
 local function addBall(ball)
     if trackedBalls[ball] then return end
     trackedBalls[ball] = {
@@ -86,19 +73,17 @@ local function removeBall(ball)
     print("[DEBUG] Removed ball from tracking: " .. ball.Name)
 end
 
--- FUNCTION: Determine if trajectory should be shown based on teams
+-- FUNCTION: Determine if the ball hit an opponent (based on team)
 local function isOpponentHit(ball)
     local hitter = ball:GetAttribute("LastHitter")
-    if not hitter or not hitter:IsA("Player") then return true end -- Assume non-player objects are valid hits
-    
-    -- Hide trajectory for players on the same team as the local player
+    if not hitter or not hitter:IsA("Player") then return true end
     return hitter.Team ~= player.Team
 end
 
--- SCAN FOR BALLS AT A LOWER FREQUENCY
-spawn(function()
-    while wait(0.3) do
-        if _G.BallPredictor1Enabled then
+-- Start scanning for balls in a coroutine
+predictor.scanBallsThread = coroutine.create(function()
+    while predictor.running do
+        if predictor.enabled then
             local foundBalls = {}
             for _, obj in ipairs(workspace:GetDescendants()) do
                 if obj:IsA("BasePart") and string.find(string.lower(obj.Name), "ball") then
@@ -116,12 +101,14 @@ spawn(function()
                 end
             end
         end
+        wait(0.3)
     end
 end)
+coroutine.resume(predictor.scanBallsThread)
 
--- MAIN LOOP: Update tracked balls every frame
-RunService.RenderStepped:Connect(function(deltaTime)
-    if not _G.BallPredictor1Enabled then return end
+-- Main loop: update tracked balls each frame using RenderStepped
+predictor.renderConnection = RunService.RenderStepped:Connect(function(deltaTime)
+    if not predictor.enabled then return end
 
     for ball, state in pairs(trackedBalls) do
         local currentPos = ball.Position
@@ -144,7 +131,6 @@ RunService.RenderStepped:Connect(function(deltaTime)
             end
         end
 
-        -- Update trajectory markers with simulation
         if state.trajectoryMarkers then
             for i, marker in ipairs(state.trajectoryMarkers) do
                 local t = i * timeStep
@@ -157,3 +143,16 @@ RunService.RenderStepped:Connect(function(deltaTime)
         state.lastPos = currentPos
     end
 end)
+
+-- Define the stop method to cleanly terminate loops and disconnect connections
+function predictor.stop()
+    predictor.running = false
+    predictor.enabled = false
+    if predictor.renderConnection then
+        predictor.renderConnection:Disconnect()
+    end
+    print("[DEBUG] Ball Predictor 1 stopped.")
+end
+
+print("[DEBUG] Ball Predictor 1 started.")
+return predictor
