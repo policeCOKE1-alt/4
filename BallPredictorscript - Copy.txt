@@ -11,15 +11,19 @@ local gravity = workspace.Gravity * 0.60  -- typically 196.2 studs/sec^2 in Robl
 
 -- SETTINGS
 local numTrajectoryPoints = 100         -- number of dots per trajectory line
-local timeStep = 0.01                  -- Further reduced for more precise simulation
-local maxTrackingDistance = 150        -- max distance (studs) to track a ball
+local timeStep = 0.01                   -- Further reduced for more precise simulation
+local maxTrackingDistance = 150         -- max distance (studs) to track a ball
 
--- Shot speeds for each type of hit (adjust as needed)
-local shotSpeeds = {
-    forehand = {min = 32.5, max = 62.5},
-    overhead = {min = 35, max = 85},
-    serve = {min = 55, max = 107.5}
-}
+-- Global toggle and commands for enabling/disabling the ball predictor
+_G.BallPredictor1Enabled = true
+_G.BallPredictor1On = function()
+    _G.BallPredictor1Enabled = true
+    print("[DEBUG] Ball Predictor 1 turned ON")
+end
+_G.BallPredictor1Off = function()
+    _G.BallPredictor1Enabled = false
+    print("[DEBUG] Ball Predictor 1 turned OFF")
+end
 
 -- FOLDER FOR TRAJECTORY MARKERS
 local trajectoryFolder = workspace:FindFirstChild("Trajectory")
@@ -40,7 +44,7 @@ local function createTrajectoryMarkers()
         part.Size = Vector3.new(0.3, 0.3, 0.3)
         part.Shape = Enum.PartType.Ball
         part.Material = Enum.Material.SmoothPlastic
-        part.Color = Color3.new(1.000000, 0.000000, 0.000000)  -- red markers
+        part.Color = Color3.new(1, 0, 0)  -- red markers
         part.Transparency = 0.8 -- Slightly transparent to be less distracting
         part.Anchored = true
         part.CanCollide = false
@@ -50,7 +54,7 @@ local function createTrajectoryMarkers()
         table.insert(markers, part)
     end
     
-    -- Schedule markers for removal after 1 second
+    -- Schedule markers for removal after 0.8 seconds
     task.spawn(function()
         wait(0.8)
         for _, marker in ipairs(markers) do
@@ -94,20 +98,22 @@ end
 -- SCAN FOR BALLS AT A LOWER FREQUENCY
 spawn(function()
     while wait(0.3) do
-        local foundBalls = {}
-        for _, obj in ipairs(workspace:GetDescendants()) do
-            if obj:IsA("BasePart") and string.find(string.lower(obj.Name), "ball") then
-                if (obj.Position - hrp.Position).Magnitude <= maxTrackingDistance then
-                    foundBalls[obj] = true
-                    if not trackedBalls[obj] then
-                        addBall(obj)
+        if _G.BallPredictor1Enabled then
+            local foundBalls = {}
+            for _, obj in ipairs(workspace:GetDescendants()) do
+                if obj:IsA("BasePart") and string.find(string.lower(obj.Name), "ball") then
+                    if (obj.Position - hrp.Position).Magnitude <= maxTrackingDistance then
+                        foundBalls[obj] = true
+                        if not trackedBalls[obj] then
+                            addBall(obj)
+                        end
                     end
                 end
             end
-        end
-        for ball, _ in pairs(trackedBalls) do
-            if not ball or not ball.Parent or not foundBalls[ball] then
-                removeBall(ball)
+            for ball, _ in pairs(trackedBalls) do
+                if not ball or not ball.Parent or not foundBalls[ball] then
+                    removeBall(ball)
+                end
             end
         end
     end
@@ -115,6 +121,8 @@ end)
 
 -- MAIN LOOP: Update tracked balls every frame
 RunService.RenderStepped:Connect(function(deltaTime)
+    if not _G.BallPredictor1Enabled then return end
+
     for ball, state in pairs(trackedBalls) do
         local currentPos = ball.Position
         local currentVelocity = (currentPos - state.lastPos) / deltaTime
@@ -136,7 +144,7 @@ RunService.RenderStepped:Connect(function(deltaTime)
             end
         end
 
-        -- Update trajectory markers with more accurate simulation
+        -- Update trajectory markers with simulation
         if state.trajectoryMarkers then
             for i, marker in ipairs(state.trajectoryMarkers) do
                 local t = i * timeStep
