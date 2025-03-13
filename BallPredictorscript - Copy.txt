@@ -64,13 +64,11 @@ local function addBall(ball)
         trajectoryMarkers = nil,
         lastHitter = nil
     }
-    print("[DEBUG] Now tracking new ball: " .. ball.Name)
 end
 
 -- FUNCTION: Remove a ball from tracking
 local function removeBall(ball)
     trackedBalls[ball] = nil
-    print("[DEBUG] Removed ball from tracking: " .. ball.Name)
 end
 
 -- FUNCTION: Determine if the ball hit an opponent (based on team)
@@ -151,8 +149,6 @@ function predictor.stop()
     if predictor.renderConnection then
         predictor.renderConnection:Disconnect()
     end
-    print("[DEBUG] Ball Predictor 1 stopped.")
 end
 
-print("[DEBUG] Ball Predictor 1 started.")
 return predictor
